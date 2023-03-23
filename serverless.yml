@@ -1,0 +1,64 @@
+service: openai-line-bot
+frameworkVersion: '3'
+useDotenv: true
+# カスタム変数
+custom:
+  defaultStage: dev
+  pythonRequirements:
+    dockerizePip: non-linux
+# プロバイダ
+provider:
+  name: aws
+  runtime: python3.9
+  timeout: 30
+  stage: ${opt:stage, self:custom.defaultStage}
+  region: ap-northeast-1
+# Lambda用の権限
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+      Resource: "arn:aws:dynamodb:${aws:region}:*:table/${env:DYNAMODB_TABLE}"
+# Lambda
+functions:
+  webhook:
+    handler: handler.webhook
+    events:
+      - http:
+          path: webhook
+          method: post
+          cors: true
+    environment:
+      OPENAI_API_KEY: ${env:OPENAI_API_KEY}
+      LINE_CHANNEL_SECRET: ${env:LINE_CHANNEL_SECRET}
+      LINE_CHANNEL_ACCESS_TOKEN: ${env:LINE_CHANNEL_ACCESS_TOKEN}
+      DYNAMODB_TABLE: ${env:DYNAMODB_TABLE}
+# DynamoDB
+resources:
+  Resources:
+    MessageHistoryTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${env:DYNAMODB_TABLE}
+        AttributeDefinitions:
+          - AttributeName: user_id
+            AttributeType: S
+          - AttributeName: timestamp
+            AttributeType: N
+        KeySchema:
+          - AttributeName: user_id
+            KeyType: HASH
+          - AttributeName: timestamp
+            KeyType: RANGE
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+
+
+plugins:
+  - serverless-python-requirements
