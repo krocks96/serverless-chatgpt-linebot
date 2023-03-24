@@ -42,26 +42,24 @@ def webhook(event, context):
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
+    send_timestamp = int(time.time() * 1000)
     print("Handling message")
     user_id = event.source.user_id
     user_message = event.message.text
+    user_message_obj = {"role": "user", "content": user_message}
     print(f"User message: {user_message}")
-    # ユーザー発言の保存
-    try:
-        save_message_to_history(user_id, {"role": "user", "content": user_message})
-    except Exception as e:
-        print(f"Error saving user message: {e}")
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="エラーが発生しました。メッセージの保存に失敗しました。"))
-        return
     # 履歴の取得
     message_history = get_message_history(user_id)
-    messages = [{"role": item["message"]["role"], "content": item["message"]["content"]} for item in message_history]
+    # 履歴の順序を変えて最新のメッセージを追加
+    messages = [{"role": item["message"]["role"], "content": item["message"]["content"]} for item in reversed(message_history)]
+    messages.append(user_message_obj)
     print(f"Message history: {messages}")
     # API呼び出し
     try:
         openai_response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
-            messages=messages
+            messages=messages,
+            request_timeout=20
         )
     except Exception as e:
         print(f"Error generating AI response: {e}")
@@ -69,6 +67,8 @@ def handle_message(event):
         return
     # レスポンスの取得
     ai_message = openai_response.choices[0].message.content
+    ai_message_obj = {"role": "assistant", "content": ai_message}
+    receive_timestamp = int(time.time() * 1000)
     print(f"AI message: {ai_message}")
     # LINEへの返答
     try:
@@ -76,12 +76,19 @@ def handle_message(event):
     except LineBotApiError as e:
         print(f"Error sending AI response: {e}")
         return
-
-    # DynamoDBへ保存
+    # ユーザー発言の保存
     try:
-        save_message_to_history(user_id, {"role": "assistant", "content": ai_message})
+        save_message_to_history(user_id, user_message_obj, send_timestamp)
+    except Exception as e:
+        print(f"Error saving user message: {e}")
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="エラーが発生しました。メッセージの保存に失敗しました。"))
+        return
+    # AI発言の保存
+    try:
+        save_message_to_history(user_id, ai_message_obj , receive_timestamp)
     except Exception as e:
         print(f"Error saving AI message: {e}")
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="エラーが発生しました。メッセージの保存に失敗しました。"))
 
 def get_message_history(user_id, limit=10):
     print(f"Getting message history for user: {user_id}")
@@ -92,8 +99,7 @@ def get_message_history(user_id, limit=10):
     )
     return response['Items']
 
-def save_message_to_history(user_id, message):
-    timestamp = int(time.time() * 1000)
+def save_message_to_history(user_id, message, timestamp):
     print(f"Saving message to history: {message}")
     table.put_item(
         Item={
